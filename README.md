@@ -48,6 +48,7 @@ yay -S zenvision-linux-git        # installs the `zenvision` CLI + the udev rule
 ```bash
 # Static image (auto-resized to 256x64, converted to grayscale)
 sudo ./zenvision.py image picture.png
+sudo ./zenvision.py image picture.png --sweep   # + burn-in-protection sweep
 
 # White test pattern / clear
 sudo ./zenvision.py image --white
@@ -55,9 +56,20 @@ sudo ./zenvision.py off
 
 # Play a folder of frames as a smooth animation
 sudo ./zenvision.py anim frames/ --fps 20
+
+# Ask the panel what it's showing (clock / theme / custom image)
+sudo ./zenvision.py status
+
+# Built-in content (the panel runs these on its own)
+sudo ./zenvision.py theme 4 --speed 2
+sudo ./zenvision.py clock 1 --battery
+sudo ./zenvision.py time              # sync the panel clock to the PC
+sudo ./zenvision.py speed 2           # built-in content speed (1-3)
+sudo ./zenvision.py bootanim on       # lid-close boot animation
 ```
 
-Brightness: `--bright 0xff` (scale is approximate; tune by eye).
+Brightness: `--bright N` is a raw byte 0–255 (decimal or `0x` hex); the MyASUS
+defaults are `0x0f` dim, `0x4f` mid, `0xbc` bright. Default is `0x4f`.
 
 ### Generate the demo animation
 
@@ -89,8 +101,10 @@ Then run without `sudo`.
 
 ## Notes & safety
 
-- The panel is firmware-powered and survives a re-plug; experiments are recoverable
-  with a reboot. Sending malformed control reports on the HID interface can soft-reset
+- Displaying static elements for an extended amount of time on the OLED display will cause permanent pixel degradation.
+- The panel is firmware-powered and survives a re-plug; bad experiments are
+  recoverable by replaying the settings sequence in PROTOCOL.md (a reboot also
+  clears it). Sending malformed control reports on the HID interface can soft-reset
   the MCU (it re-enumerates cleanly) — this driver only uses the vendor interface.
 - This is an independent, unofficial project. Not affiliated with or endorsed by ASUS.
 - No ASUS firmware, binaries, or decompiled code are included or required.
@@ -100,6 +114,23 @@ Then run without `sudo`.
 If you have another ASUS model with a lid OLED, please open an issue with:
 `lsusb`, your model number, and whether the framing here works. The protocol doc
 is written to make porting straightforward.
+
+## Protocol research
+
+**Version 2** protocol notes are based on
+[zenvision-protocol-research](https://github.com/BaguetteJet/zenvision-protocol-research) by [BaguetteJet](https://github.com/BaguetteJet). USB captures of the MyASUS app on Windows; the raw capture records live there. Version 2 adds:
+
+- the `30 05` built-in content commands — clock layouts, themes, power /
+  battery icon;
+- the `30 06` content-mode selector — custom image / stream / news ticker.
+  The original "begin → apply" image flow is really content mode 1 plus a
+  bulk transfer: **no commit/apply command exists**, the frame is shown by
+  the transfer itself;
+- `31 02` screen sweep, `32 02` boot animation, `33 01` speed, `35 01`
+  brightness, `40 09` panel clock;
+- the `F1 03` engine-state query — the `0x82` endpoint replies to **every**
+  command with the current engine state (`01` clock / `02` theme / `07`
+  image), previously assumed to always return zeros.
 
 ## License
 

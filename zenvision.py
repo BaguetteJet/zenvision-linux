@@ -9,10 +9,16 @@ The display protocol was reverse-engineered for interoperability; see
 PROTOCOL.md for the full description.
 
 Usage:
-    sudo ./zenvision.py image  picture.png [--bright 0xff]
-    sudo ./zenvision.py image  --white                  # white test pattern
-    sudo ./zenvision.py off                             # clear (all black)
-    sudo ./zenvision.py anim   frames_dir/ [--fps 20]   # play a frame folder
+    sudo ./zenvision.py image   picture.png [--bright 0x4f] [--sweep]
+    sudo ./zenvision.py image   --white                   # white test pattern
+    sudo ./zenvision.py off                              # clear (all black)
+    sudo ./zenvision.py anim    frames_dir/ [--fps 20]    # play a frame folder
+    sudo ./zenvision.py status                           # query the content engine
+    sudo ./zenvision.py time                             # set current time
+    sudo ./zenvision.py theme 4 [--speed 2]              # built-in theme 1-4
+    sudo ./zenvision.py clock 1 [--battery] [--speed 2]  # built-in clock layout 1-2
+    sudo ./zenvision.py speed 2                          # built-in content speed 1-3
+    sudo ./zenvision.py bootanim on                      # lid-close boot animation
 
 Requires: pyusb, pillow, and raw USB access (run as root or install the
 provided udev rule). See README.md.
@@ -30,8 +36,15 @@ VID, PID = 0x0B05, 0x8835
 IFACE = 0
 EP_CMD = 0x03    # interrupt OUT — control commands (512 bytes)
 EP_BULK = 0x07   # bulk OUT      — framebuffer (8704 bytes)
+EP_RESP = 0x82   # interrupt IN  — engine-state replies (512 bytes)
 W, H = 256, 64   # panel resolution
 FRAME_BYTES = 8704
+
+# 35 01 <val> — the three brightness levels the MyASUS app exposes
+BRIGHTNESS = {1: 0x0F, 2: 0x4F, 3: 0xBC}
+
+# F1 03 replies (EP 0x82, ASCII)
+ENGINE_STATES = {"01": "clock layout", "02": "built-in theme", "07": "custom image"}
 
 
 def encode(img):
@@ -104,16 +117,78 @@ class ZenVision:
     def _b(self, data):
         self.dev.write(EP_BULK, data, timeout=3000)
 
-    def show_image(self, fb, bright=0xFF):
-        """Display a single static framebuffer (begin -> data -> apply)."""
-        self._c(_cmd(0x30, 0x06, 0x05, 0x00, 0x00, 0x00, 0x00, 0x01))  # begin
-        self._b(fb)                                                    # pixels
-        self._c(_cmd(0x31, 0x02, bright & 0xFF, 0x03))                 # apply
+    def engine_state(self):
+        """F1 03 — query the content engine. Returns '01' (clock), '02'
+        (theme), '07' (image), or None if the panel didn't reply."""
+        try:
+            self.dev.read(EP_RESP, 512, timeout=200)  # drain stale reply
+        except usb.core.USBError:
+            pass
+        self._c(_cmd(0xF1, 0x03))
+        try:
+            r = bytes(self.dev.read(EP_RESP, 512, timeout=2000))
+            return r[:2].decode("ascii")
+        except (usb.core.USBError, UnicodeDecodeError):
+            return None
 
-    def stream_begin(self, bright=0xFF):
-        """Enter streaming/animation mode (frames pushed bulk-only, no flicker)."""
-        self._c(_cmd(0x30, 0x06, 0x05, 0x00, 0x00, 0x00, 0x00, 0x02))  # mode 2
-        self._c(_cmd(0x31, 0x02, bright & 0xFF, 0x03))                 # brightness
+    def set_content_mode(self, mode):
+        """30 06 05 00 00 00 00 <mode> — 1 custom image, 2 custom stream,
+        3 news ticker."""
+        self._c(_cmd(0x30, 0x06, 0x05, 0x00, 0x00, 0x00, 0x00, mode))
+
+    def set_brightness(self, value):
+        """35 01 <val> — panel brightness, raw byte 0-255 (MyASUS levels:
+        0x0F dim, 0x4F mid, 0xBC bright)."""
+        self._c(_cmd(0x35, 0x01, value))
+
+    def set_clock(self, layout):
+        """30 05 01 <layout> — show a built-in clock layout (1-2)."""
+        self._c(_cmd(0x30, 0x05, 0x01, layout))
+
+    def set_theme(self, theme):
+        """30 05 02 00 <theme> — play a built-in theme (1-4)."""
+        self._c(_cmd(0x30, 0x05, 0x02, 0x00, theme))
+
+    def set_battery(self, on):
+        """30 05 04 00 00 00 <val> — battery icon on/off (clock layouts)."""
+        self._c(_cmd(0x30, 0x05, 0x04, 0x00, 0x00, 0x00, 0x03 if on else 0x01))
+
+    def set_screen_sweep(self, on):
+        """31 02 <a> <b> — burn-in-protection sweep over static content."""
+        self._c(_cmd(0x31, 0x02, 0x02 if on else 0x00, 0x03 if on else 0x04))
+
+    def set_boot_animation(self, on):
+        """32 02 <a> <b> — lid-close boot animation on/off."""
+        self._c(_cmd(0x32, 0x02, 0x02 if on else 0x00, 0x02 if on else 0x00))
+
+    def set_speed(self, speed):
+        """33 01 <speed> — built-in content speed (1 slow .. 3 fast)."""
+        self._c(_cmd(0x33, 0x01, speed))
+
+    def set_time(self, t=None, use_24h=True):
+        """40 09 ... — set the panel clock."""
+        t = t or time.localtime()
+        weekday = (t.tm_wday + 1) % 7  # device: Sunday = 0, Python: Monday = 0
+        self._c(_cmd(0x40, 0x09, *t.tm_year.to_bytes(2, "little"), t.tm_mon,
+                     t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec,
+                     int(use_24h), weekday))
+
+    def show_image(self, fb, bright=BRIGHTNESS[2], sweep=False):
+        """Display a single static framebuffer (content mode 1, then pixels).
+
+        No commit/apply command exists — the frame is shown by the content-mode
+        command plus the bulk transfer itself. Optionally enables the screen
+        sweep (burn-in protection), off by default.
+        """
+        self.set_content_mode(1)
+        self.set_brightness(bright)
+        self._b(fb)
+        self.set_screen_sweep(sweep)
+
+    def stream_begin(self, bright=BRIGHTNESS[2]):
+        """Enter streaming mode (content mode 2): frames pushed bulk-only."""
+        self.set_content_mode(2)
+        self.set_brightness(bright)
 
     def stream_frame(self, fb):
         self._b(fb)
@@ -134,6 +209,13 @@ def _load_frames(folder):
     return [encode(Image.open(f)) for f in files]
 
 
+def _level(arg, lo, hi):
+    v = int(arg, 0)
+    if not lo <= v <= hi:
+        raise argparse.ArgumentTypeError("must be %d-%d" % (lo, hi))
+    return v
+
+
 def main():
     ap = argparse.ArgumentParser(description="Drive the ASUS ZenVision lid OLED from Linux.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -141,16 +223,42 @@ def main():
     pi = sub.add_parser("image", help="show a single image")
     pi.add_argument("path", nargs="?")
     pi.add_argument("--white", action="store_true", help="white test pattern")
-    pi.add_argument("--bright", type=lambda x: int(x, 0), default=0xFF)
+    pi.add_argument("--bright", type=lambda x: _level(x, 0, 255), default=BRIGHTNESS[2])
+    pi.add_argument("--sweep", action="store_true",
+                    help="enable the burn-in-protection sweep over the image (default off)")
     pi.add_argument("--hold", type=float, default=0.0, help="keep the channel open N seconds")
 
-    sub.add_parser("off", help="clear the panel (all black)")
+    sub.add_parser("off", help="clear the panel (black)")
 
     pa = sub.add_parser("anim", help="play a folder of frames")
     pa.add_argument("dir")
     pa.add_argument("--fps", type=float, default=20.0)
-    pa.add_argument("--bright", type=lambda x: int(x, 0), default=0xFF)
+    pa.add_argument("--bright", type=lambda x: _level(x, 0, 255), default=BRIGHTNESS[2])
     pa.add_argument("--dur", type=float, default=0.0, help="seconds (0 = loop forever)")
+
+    sub.add_parser("status", help="query the content engine (clock/theme/image)")
+
+    pt = sub.add_parser("time", help="sync the panel clock to the current time")
+    pt.add_argument("--12h", dest="h12", action="store_true",
+                    help="12-hour format (default 24h)")
+
+    pt = sub.add_parser("theme", help="play a built-in theme (1-4)")
+    pt.add_argument("theme", type=lambda x: _level(x, 1, 4))
+    pt.add_argument("--speed", type=lambda x: _level(x, 1, 3), default=2)
+    pt.add_argument("--bright", type=lambda x: _level(x, 0, 255), default=BRIGHTNESS[2])
+
+    pc = sub.add_parser("clock", help="show a built-in clock layout (1-2)")
+    pc.add_argument("layout", type=lambda x: _level(x, 1, 2))
+    pc.add_argument("--12h", dest="h12", action="store_true", help="12-hour format (default 24h)")
+    pc.add_argument("--battery", action="store_true", help="show the battery icon")
+    pc.add_argument("--speed", type=lambda x: _level(x, 1, 3), default=2)
+    pc.add_argument("--bright", type=lambda x: _level(x, 0, 255), default=BRIGHTNESS[2])
+
+    ps = sub.add_parser("speed", help="set the built-in content speed (1-3)")
+    ps.add_argument("speed", type=lambda x: _level(x, 1, 3))
+
+    pb = sub.add_parser("bootanim", help="toggle the lid-close boot animation")
+    pb.add_argument("state", choices=["on", "off"])
 
     args = ap.parse_args()
     zv = ZenVision()
@@ -162,12 +270,12 @@ def main():
                 fb = encode(Image.open(args.path))
             else:
                 sys.exit("give an image path or --white")
-            zv.show_image(fb, args.bright)
+            zv.show_image(fb, args.bright, args.sweep)
             if args.hold:
                 time.sleep(args.hold)
 
         elif args.cmd == "off":
-            zv.show_image(encode(Image.new("L", (W, H), 0)), 0x00)
+            zv.show_image(encode(Image.new("L", (W, H), 0)))
 
         elif args.cmd == "anim":
             frames = _load_frames(args.dir)
@@ -182,6 +290,35 @@ def main():
                         time.sleep(delay)
             except KeyboardInterrupt:
                 pass
+
+        elif args.cmd == "status":
+            state = zv.engine_state()
+            if state is None:
+                sys.exit("no reply from the panel")
+            print(ENGINE_STATES.get(state, "unknown engine state '%s'" % state))
+
+        elif args.cmd == "theme":
+            zv.set_brightness(args.bright)
+            zv.set_speed(args.speed)
+            zv.set_theme(args.theme)
+
+        elif args.cmd == "time":
+            zv.set_time(use_24h=not args.h12)
+
+        elif args.cmd == "clock":
+            zv.set_brightness(args.bright)
+            zv.set_battery(args.battery)
+            zv.set_screen_sweep(args.layout == 2)  # MyASUS pairs layout 2 with sweep on
+            zv.set_clock(args.layout)
+            zv.set_speed(args.speed)
+            zv.set_time(use_24h=not args.h12)
+
+        elif args.cmd == "speed":
+            zv.set_speed(args.speed)
+
+        elif args.cmd == "bootanim":
+            zv.set_boot_animation(args.state == "on")
+
     finally:
         zv.close()
 
