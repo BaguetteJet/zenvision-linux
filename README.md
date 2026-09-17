@@ -66,10 +66,12 @@ sudo ./zenvision.py clock 1 --battery
 sudo ./zenvision.py time              # sync the panel clock to the PC
 sudo ./zenvision.py speed 2           # built-in content speed (1-3)
 sudo ./zenvision.py bootanim on       # lid-close boot animation
+sudo ./zenvision.py bright 0x4f       # panel brightness (0-255)
 ```
 
 Brightness: `--bright N` is a raw byte 0–255 (decimal or `0x` hex); the MyASUS
-defaults are `0x0f` dim, `0x4f` mid, `0xbc` bright. Default is `0x4f`.
+defaults are `0x0f` dim, `0x4f` mid, `0xbc` bright. Default is `0x4f`. Set it
+standalone with `zenvision.py bright N`.
 
 ### Generate the demo animation
 

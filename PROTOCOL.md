@@ -168,8 +168,8 @@ No per-frame begin/apply ⇒ no blanking between frames.
 
 `35 01 <val>` sets the brightness on a 0–255 byte scale. The named defaults seen
 in the MyASUS captures are `0f` (dim), `4f` (mid), `bc` (bright). The CLI
-accepts any byte via `--bright N` (decimal or `0x` hex), defaulting to `4f`.
-Tune by eye.
+accepts any byte via `--bright N` (decimal or `0x` hex, defaulting to `4f`) or
+the standalone `zenvision.py bright N`. Tune by eye.
 
 ## Built-in content
 

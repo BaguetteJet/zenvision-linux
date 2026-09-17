@@ -19,6 +19,7 @@ Usage:
     sudo ./zenvision.py clock 1 [--battery] [--speed 2]  # built-in clock layout 1-2
     sudo ./zenvision.py speed 2                          # built-in content speed 1-3
     sudo ./zenvision.py bootanim on                      # lid-close boot animation
+    sudo ./zenvision.py bright 0x4f                      # panel brightness 0-255
 
 Requires: pyusb, pillow, and raw USB access (run as root or install the
 provided udev rule). See README.md.
@@ -260,6 +261,9 @@ def main():
     pb = sub.add_parser("bootanim", help="toggle the lid-close boot animation")
     pb.add_argument("state", choices=["on", "off"])
 
+    pb = sub.add_parser("bright", help="set the panel brightness (raw byte 0-255)")
+    pb.add_argument("value", type=lambda x: _level(x, 0, 255))
+
     args = ap.parse_args()
     zv = ZenVision()
     try:
@@ -318,6 +322,9 @@ def main():
 
         elif args.cmd == "bootanim":
             zv.set_boot_animation(args.state == "on")
+
+        elif args.cmd == "bright":
+            zv.set_brightness(args.value)
 
     finally:
         zv.close()

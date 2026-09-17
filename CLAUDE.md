@@ -32,6 +32,7 @@ sudo ./zenvision.py clock 1 [--battery] [--speed 2]
 sudo ./zenvision.py time                          # sync the panel clock
 sudo ./zenvision.py speed 2                       # built-in content speed (1-3)
 sudo ./zenvision.py bootanim on|off               # lid-close boot animation
+sudo ./zenvision.py bright 0x4f                   # panel brightness (0-255)
 
 # Generate the demo animation (writes PNG frames)
 python examples/spark_demo.py --out frames --w 256 --h 64
@@ -84,7 +85,8 @@ Three layers, top to bottom:
    `0x0f`/`0x4f`/`0xbc`), and `set_time`.
 
 3. **`main()`** — argparse CLI (`image` / `off` / `anim` / `status` / `theme` /
-   `clock` / `time` / `speed` / `bootanim` subcommands) wiring the above together.
+   `clock` / `time` / `speed` / `bootanim` / `bright` subcommands) wiring the
+   above together.
 
 ## Hardware constraints to respect
 
